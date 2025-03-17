@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 
 	"github.com/BoltzExchange/boltz-client/boltz"
@@ -174,7 +174,7 @@ func CreateReverseClaimTransaction(endpoint string, id string, claimLeaf string,
 	defer resp.Body.Close()
 
 	// Read response
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %v", err)
 	}
@@ -186,4 +186,135 @@ func CreateReverseClaimTransaction(endpoint string, id string, claimLeaf string,
 	fmt.Printf("Transaction broadcasted successfully: %s\n", string(body))
 
 	return nil
+}
+
+func CreateRefundTransaction(endpoint string, id string, claimLeaf string, refundLeaf string, transactionHex string, privateKey string, servicePubKey string, feeRate int32, timeoutBlockHeight int32, destinationAddress string, lockupAddress string, isTestnet bool, cooperative bool) (string, error) {
+
+	var toCurrency = boltz.CurrencyBtc
+
+	var network *boltz.Network
+	if isTestnet {
+		network = boltz.TestNet
+	} else {
+		network = boltz.MainNet
+	}
+
+	boltzApi := &boltz.Api{URL: endpoint}
+
+	// Decode the hex string to bytes
+	privKeyBytes, err := hex.DecodeString(privateKey)
+	if err != nil {
+		fmt.Printf("Failed to decode hex string: %v\n", err)
+		return "", fmt.Errorf("failed to decode hex string: %v", err)
+	}
+
+	// Create the private key using btcec
+	keys, _ := btcec.PrivKeyFromBytes(privKeyBytes)
+
+	// Decode the hex string to bytes
+	servicePubKeyBytes, err := hex.DecodeString(servicePubKey)
+	if err != nil {
+		return "", fmt.Errorf("error decoding service public key hex: %s", err)
+	}
+
+	// Parse the public key
+	servicePubKeyFormatted, err := secp256k1.ParsePubKey(servicePubKeyBytes)
+	if err != nil {
+		return "", fmt.Errorf("error parsing service public key %s", err)
+	}
+
+	// Creating the swapTree
+	swapTree := &boltz.SwapTree{
+		ClaimLeaf:  leaf(claimLeaf),
+		RefundLeaf: leaf(refundLeaf),
+	}
+	fmt.Println("SwapTree created successfully")
+
+	if err := swapTree.Init(false, false, keys, servicePubKeyFormatted); err != nil {
+		return "", fmt.Errorf("error initializing swap tree %s", err)
+	}
+
+	satPerVbyte := float64(feeRate)
+
+	lockupTransaction, err := boltz.NewTxFromHex(toCurrency, transactionHex, nil)
+	if err != nil {
+		return "", fmt.Errorf("error constructing lockup tx %v", err)
+	}
+	fmt.Println("Lockup transaction constructed successfully")
+
+	vout, _, err := lockupTransaction.FindVout(network, lockupAddress)
+	if err != nil {
+		return "", fmt.Errorf("error finding vout %s", err)
+	}
+
+	refundTransaction, _, err := boltz.ConstructTransaction(
+		network,
+		boltz.CurrencyBtc,
+		[]boltz.OutputDetails{
+			{
+				SwapId:             id,
+				SwapType:           boltz.NormalSwap,
+				Address:            destinationAddress,
+				LockupTransaction:  lockupTransaction,
+				Vout:               vout,
+				Preimage:           []byte{},
+				PrivateKey:         keys,
+				TimeoutBlockHeight: uint32(timeoutBlockHeight),
+				SwapTree:           swapTree,
+				Cooperative:        cooperative,
+			},
+		},
+		satPerVbyte,
+		boltzApi,
+	)
+
+	if err != nil {
+		return "", fmt.Errorf("could not create refund transaction: %w", err)
+	}
+	fmt.Println("Refund transaction constructed successfully")
+
+	txHex, err := refundTransaction.Serialize()
+	if err != nil {
+		return "", fmt.Errorf("could not serialize refund transaction: %w", err)
+	}
+	fmt.Println("Refund transaction serialized successfully")
+
+	var broadcastUrl string
+	if isTestnet {
+		broadcastUrl = "https://mempool.space/testnet/api/tx"
+	} else {
+		broadcastUrl = "https://mempool.space/api/tx"
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequest("POST", broadcastUrl, bytes.NewBufferString(txHex))
+	if err != nil {
+		return "", fmt.Errorf("failed to create HTTP request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Execute HTTP request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to send HTTP request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("non-200 response: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	txid := string(body)
+	fmt.Printf("Transaction broadcasted successfully: %s\n", txid)
+	fmt.Println("Transaction broadcasted successfully")
+
+	return txid, nil
+
 }
