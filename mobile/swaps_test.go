@@ -295,3 +295,63 @@ func TestBuildRefundTransactionPaysExactMinerFee(t *testing.T) {
 	require.Len(t, tx.TxOut, 1)
 	require.Equal(t, int64(100000-250), tx.TxOut[0].Value)
 }
+
+func TestBuildRefundTransactionRejectsFeeAtOrAboveLockup(t *testing.T) {
+	destination, err := btcutil.NewAddressTaproot(
+		bytes.Repeat([]byte{3}, 32), boltz.Regtest.Btc,
+	)
+	require.NoError(t, err)
+
+	refund := newRefundFixture(t)
+	tests := []struct {
+		minerFee int32
+		err      string
+	}{
+		{minerFee: 99800, err: "below the dust limit"},
+		{minerFee: 100000, err: "below the dust limit"},
+		{minerFee: 150000, err: "value less than fee"},
+	}
+	for _, test := range tests {
+		_, err := BuildRefundTransaction(
+			"http://127.0.0.1:1", "swap",
+			hex.EncodeToString(refund.claimLeaf),
+			hex.EncodeToString(refund.refundLeaf), refund.lockupHex,
+			hex.EncodeToString(refund.ourKey.Serialize()),
+			hex.EncodeToString(
+				refund.serverKey.PubKey().SerializeCompressed(),
+			),
+			2, test.minerFee, 150, destination.EncodeAddress(),
+			refund.lockupAddress, false, "regtest",
+		)
+		require.ErrorContains(t, err, test.err, "minerFee %d", test.minerFee)
+	}
+}
+
+func TestBuildReverseClaimTransactionRejectsFeeAtOrAboveLockup(t *testing.T) {
+	fixture := newReverseSwapFixture(t)
+
+	// the host refuses to co-sign, so the claim falls back to the script
+	// path, which is where an oversized fee went unreported
+	host := httptest.NewServer(http.NotFoundHandler())
+	defer host.Close()
+
+	destination, err := btcutil.NewAddressTaproot(
+		bytes.Repeat([]byte{2}, 32), boltz.Regtest.Btc,
+	)
+	require.NoError(t, err)
+
+	for _, minerFee := range []int32{100000, 150000} {
+		_, err := BuildReverseClaimTransaction(
+			host.URL, "swap", hex.EncodeToString(fixture.claimLeaf),
+			hex.EncodeToString(fixture.refundLeaf),
+			hex.EncodeToString(fixture.ourKey.Serialize()),
+			hex.EncodeToString(
+				fixture.serverKey.PubKey().SerializeCompressed(),
+			),
+			hex.EncodeToString(fixture.preimage), fixture.lockupHex,
+			fixture.lockupAddress, destination.EncodeAddress(), 2,
+			minerFee, "regtest",
+		)
+		require.Error(t, err, "minerFee %d", minerFee)
+	}
+}
