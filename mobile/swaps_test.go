@@ -193,7 +193,7 @@ func TestBuildRefundTransactionDoesNotBroadcast(t *testing.T) {
 		hex.EncodeToString(refund.refundLeaf), refund.lockupHex,
 		hex.EncodeToString(refund.ourKey.Serialize()),
 		hex.EncodeToString(refund.serverKey.PubKey().SerializeCompressed()),
-		2, 150, destination.EncodeAddress(), refund.lockupAddress, false,
+		2, 0, 150, destination.EncodeAddress(), refund.lockupAddress, false,
 		"regtest",
 	)
 	require.NoError(t, err)
@@ -268,4 +268,30 @@ func newRefundFixture(t *testing.T) swapFixture {
 		lockupHex:     hex.EncodeToString(buf.Bytes()),
 		lockupTxid:    lockup.TxHash(),
 	}
+}
+
+func TestBuildRefundTransactionPaysExactMinerFee(t *testing.T) {
+	destination, err := btcutil.NewAddressTaproot(
+		bytes.Repeat([]byte{3}, 32), boltz.Regtest.Btc,
+	)
+	require.NoError(t, err)
+
+	refund := newRefundFixture(t)
+	txHex, err := BuildRefundTransaction(
+		"http://127.0.0.1:1", "swap", hex.EncodeToString(refund.claimLeaf),
+		hex.EncodeToString(refund.refundLeaf), refund.lockupHex,
+		hex.EncodeToString(refund.ourKey.Serialize()),
+		hex.EncodeToString(refund.serverKey.PubKey().SerializeCompressed()),
+		2, 250, 150, destination.EncodeAddress(), refund.lockupAddress,
+		false, "regtest",
+	)
+	require.NoError(t, err)
+
+	raw, err := hex.DecodeString(txHex)
+	require.NoError(t, err)
+	tx := wire.NewMsgTx(2)
+	require.NoError(t, tx.Deserialize(bytes.NewReader(raw)))
+
+	require.Len(t, tx.TxOut, 1)
+	require.Equal(t, int64(100000-250), tx.TxOut[0].Value)
 }

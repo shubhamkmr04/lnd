@@ -166,15 +166,6 @@ func BuildReverseClaimTransaction(endpoint string, id string, claimLeaf string, 
 		return "", fmt.Errorf("error decoding preimage hex string: %w", err)
 	}
 
-	var fee boltz.Fee
-	if minerFee > 0 {
-		sats := uint64(minerFee)
-		fee = boltz.Fee{Sats: &sats}
-	} else {
-		satPerVbyte := float64(feeRate)
-		fee = boltz.Fee{SatsPerVbyte: &satPerVbyte}
-	}
-
 	claimTransaction, _, err := boltz.ConstructTransaction(
 		chain,
 		boltz.CurrencyBtc,
@@ -191,7 +182,7 @@ func BuildReverseClaimTransaction(endpoint string, id string, claimLeaf string, 
 				Cooperative:       true,
 			},
 		},
-		fee,
+		swapFee(feeRate, minerFee),
 		&boltz.Api{URL: endpoint},
 	)
 	if err != nil {
@@ -206,9 +197,20 @@ func BuildReverseClaimTransaction(endpoint string, id string, claimLeaf string, 
 	return txHex, nil
 }
 
+// swapFee pays an exact miner fee in sats when one is given, and the fee rate
+// in sat/vbyte otherwise.
+func swapFee(feeRate int32, minerFee int32) boltz.Fee {
+	if minerFee > 0 {
+		sats := uint64(minerFee)
+		return boltz.Fee{Sats: &sats}
+	}
+	satPerVbyte := float64(feeRate)
+	return boltz.Fee{SatsPerVbyte: &satPerVbyte}
+}
+
 // BuildRefundTransaction builds and signs the refund of a submarine swap's
 // lockup and returns it as hex without broadcasting it.
-func BuildRefundTransaction(endpoint string, id string, claimLeaf string, refundLeaf string, transactionHex string, privateKey string, servicePubKey string, feeRate int32, timeoutBlockHeight int32, destinationAddress string, lockupAddress string, cooperative bool, network string) (string, error) {
+func BuildRefundTransaction(endpoint string, id string, claimLeaf string, refundLeaf string, transactionHex string, privateKey string, servicePubKey string, feeRate int32, minerFee int32, timeoutBlockHeight int32, destinationAddress string, lockupAddress string, cooperative bool, network string) (string, error) {
 	chain, err := swapNetwork(network)
 	if err != nil {
 		return "", err
@@ -229,7 +231,6 @@ func BuildRefundTransaction(endpoint string, id string, claimLeaf string, refund
 		return "", fmt.Errorf("error finding vout: %w", err)
 	}
 
-	satPerVbyte := float64(feeRate)
 	refundTransaction, _, err := boltz.ConstructTransaction(
 		chain,
 		boltz.CurrencyBtc,
@@ -247,7 +248,7 @@ func BuildRefundTransaction(endpoint string, id string, claimLeaf string, refund
 				Cooperative:        cooperative,
 			},
 		},
-		boltz.Fee{SatsPerVbyte: &satPerVbyte},
+		swapFee(feeRate, minerFee),
 		&boltz.Api{URL: endpoint},
 	)
 	if err != nil {
@@ -312,7 +313,7 @@ func CreateReverseClaimTransaction(endpoint string, id string, claimLeaf string,
 // mempool.space and returns the txid. Kept for app builds that predate
 // BuildRefundTransaction.
 func CreateRefundTransaction(endpoint string, id string, claimLeaf string, refundLeaf string, transactionHex string, privateKey string, servicePubKey string, feeRate int32, timeoutBlockHeight int32, destinationAddress string, lockupAddress string, cooperative bool, isTestnet bool) (string, error) {
-	txHex, err := BuildRefundTransaction(endpoint, id, claimLeaf, refundLeaf, transactionHex, privateKey, servicePubKey, feeRate, timeoutBlockHeight, destinationAddress, lockupAddress, cooperative, legacyNetworkName(isTestnet))
+	txHex, err := BuildRefundTransaction(endpoint, id, claimLeaf, refundLeaf, transactionHex, privateKey, servicePubKey, feeRate, 0, timeoutBlockHeight, destinationAddress, lockupAddress, cooperative, legacyNetworkName(isTestnet))
 	if err != nil {
 		return "", err
 	}
